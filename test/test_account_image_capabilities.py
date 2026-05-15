@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
@@ -65,6 +66,28 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertEqual(updated["quota"], 0)
             self.assertEqual(updated["status"], "正常")
             self.assertTrue(updated["image_quota_unknown"])
+
+    def test_add_account_records_preserves_generated_password(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            accounts_path = Path(tmp_dir) / "accounts.json"
+            service = AccountService(JSONStorageBackend(accounts_path))
+
+            service.add_account_records([
+                {
+                    "access_token": "token-1",
+                    "email": "user@example.com",
+                    "password": "generated-password",
+                    "created_at": "2026-05-15T00:00:00+00:00",
+                }
+            ])
+            service.update_account("token-1", {"quota": 15, "status": "正常"})
+
+            account = service.get_account("token-1")
+            self.assertIsNotNone(account)
+            self.assertEqual(account["password"], "generated-password")
+
+            saved_accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved_accounts[0]["password"], "generated-password")
 
 
 class TokenLogTests(unittest.TestCase):
