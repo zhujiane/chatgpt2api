@@ -3,12 +3,10 @@
   "configurations": [
     {
       "name": "Backend API (uvicorn:8001)",
-      "type": "debugpy",
+      "type": "node-terminal",
       "request": "launch",
-      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
-      "program": "${workspaceFolder}/main.py",
+      "command": "source /c/Users/zhujiancc/Desktop/githubs/chatgpt2api/.venv/Scripts/activate && python main.py",
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
       "env": {
         "HOST": "127.0.0.1",
         "PORT": "8001",
@@ -16,8 +14,7 @@
         "DATABASE_URL": "postgresql://chatgpt2api:chatgpt2api_password@localhost:5432/chatgpt2api",
         "CHATGPT2API_REGISTER_AUTOSTART": "false",
         "PYTHONPATH": "${workspaceFolder}"
-      },
-      "justMyCode": true
+      }
     },
     {
       "name": "Frontend Web (Next.js:8000)",

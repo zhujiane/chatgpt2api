@@ -162,6 +162,41 @@ export type SystemLog = {
   [key: string]: unknown;
 };
 
+export type CodexUsage = {
+  five_hour_remaining?: string | number | null;
+  seven_day_remaining?: string | number | null;
+  raw?: string;
+};
+
+export type CodexUser = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  status: "normal" | "login_pending" | "error" | "unknown" | string;
+  is_default?: boolean;
+  auth_file_exists?: boolean;
+  login_running?: boolean;
+  login_mode?: string;
+  login_output?: string;
+  login_error?: string;
+  usage?: CodexUsage;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_login_at?: string | null;
+  last_status_checked_at?: string | null;
+  last_used_at?: string | null;
+};
+
+export type CodexExecResult = {
+  user_id: string;
+  started_at: string;
+  finished_at: string;
+  return_code: number;
+  timed_out: boolean;
+  stdout: string;
+  stderr: string;
+};
+
 export type ImageResponse = {
   created: number;
   data: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
@@ -290,6 +325,63 @@ export async function updateAccount(
       access_token: accessToken,
       ...updates,
     },
+  });
+}
+
+export async function fetchCodexUsers() {
+  return httpRequest<{ items: CodexUser[]; default_user_id: string }>("/api/codex/users");
+}
+
+export async function startCodexLogin(body: { name?: string; mode?: "browser" | "device" } = {}) {
+  return httpRequest<{ item: CodexUser; items: CodexUser[] }>("/api/codex/login", {
+    method: "POST",
+    body,
+  });
+}
+
+export async function fetchCodexUser(userId: string) {
+  return httpRequest<{ item: CodexUser }>(`/api/codex/users/${encodeURIComponent(userId)}`);
+}
+
+export async function updateCodexUser(userId: string, updates: { name?: string; enabled?: boolean }) {
+  return httpRequest<{ item: CodexUser; items: CodexUser[] }>(`/api/codex/users/${encodeURIComponent(userId)}`, {
+    method: "POST",
+    body: updates,
+  });
+}
+
+export async function deleteCodexUser(userId: string) {
+  return httpRequest<{ removed: number; items: CodexUser[]; default_user_id: string }>(
+    `/api/codex/users/${encodeURIComponent(userId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function setDefaultCodexUser(userId: string) {
+  return httpRequest<{ item: CodexUser; items: CodexUser[]; default_user_id: string }>(
+    `/api/codex/users/${encodeURIComponent(userId)}/default`,
+    { method: "POST" },
+  );
+}
+
+export async function refreshCodexUser(userId: string) {
+  return httpRequest<{ item: CodexUser; items: CodexUser[] }>(
+    `/api/codex/users/${encodeURIComponent(userId)}/refresh`,
+    { method: "POST" },
+  );
+}
+
+export async function runCodexExec(body: {
+  prompt: string;
+  user_id?: string;
+  cwd?: string;
+  model?: string;
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  timeout_secs?: number;
+}) {
+  return httpRequest<{ result: CodexExecResult }>("/api/codex/exec", {
+    method: "POST",
+    body,
   });
 }
 

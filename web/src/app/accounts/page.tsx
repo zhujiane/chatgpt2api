@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps } from "react";
 import {
@@ -16,6 +17,7 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  Terminal,
   Trash2,
   UserRound,
 } from "lucide-react";
@@ -45,6 +47,7 @@ import {
   deleteAccounts,
   fetchAccounts,
   refreshAccounts,
+  startCodexLogin,
   updateAccount,
   type Account,
   type AccountStatus,
@@ -180,6 +183,7 @@ function AccountsPageContent() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isStartingCodexLogin, setIsStartingCodexLogin] = useState(false);
 
   const loadAccounts = async (silent = false) => {
     if (!silent) {
@@ -341,6 +345,19 @@ function AccountsPageContent() {
     }
   };
 
+  const handleStartCodexLogin = async () => {
+    setIsStartingCodexLogin(true);
+    try {
+      const data = await startCodexLogin({ mode: "browser" });
+      toast.success(`已唤起 Codex 登录：${data.item.name}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "唤起 Codex 登录失败";
+      toast.error(message);
+    } finally {
+      setIsStartingCodexLogin(false);
+    }
+  };
+
   const toggleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedIds((prev) => Array.from(new Set([...prev, ...currentRows.map((item) => item.access_token)])));
@@ -386,6 +403,25 @@ function AccountsPageContent() {
               setPage(1);
             }}
           />
+          <Button
+            variant="outline"
+            className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
+            onClick={() => void handleStartCodexLogin()}
+            disabled={isStartingCodexLogin}
+          >
+            {isStartingCodexLogin ? <LoaderCircle className="size-4 animate-spin" /> : <Terminal className="size-4" />}
+            Codex login
+          </Button>
+          <Button
+            asChild
+            variant="outline"
+            className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
+          >
+            <Link href="/codex">
+              <Terminal className="size-4" />
+              Codex 管理
+            </Link>
+          </Button>
           <Button
             variant="outline"
             className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
