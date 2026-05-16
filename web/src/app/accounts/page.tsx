@@ -11,6 +11,7 @@ import {
   CircleOff,
   Copy,
   Download,
+  KeyRound,
   LoaderCircle,
   Pencil,
   RefreshCw,
@@ -606,7 +607,7 @@ function AccountsPageContent() {
                     <th className="w-40 px-4 py-3">恢复时间</th>
                     <th className="w-18 px-4 py-3">成功</th>
                     <th className="w-18 px-4 py-3">失败</th>
-                    <th className="w-24 px-4 py-3">操作</th>
+                    <th className="w-40 px-4 py-3">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -684,20 +685,39 @@ function AccountsPageContent() {
                         <td className="px-4 py-3 text-stone-500">{account.success}</td>
                         <td className="px-4 py-3 text-stone-500">{account.fail}</td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-1 text-stone-400">
+                          <div className="flex flex-wrap items-center gap-1 text-stone-400">
                             <button
                               type="button"
                               className="rounded-lg p-2 transition hover:bg-stone-100 hover:text-stone-700"
                               onClick={() => openEditDialog(account)}
                               disabled={isUpdating}
+                              title="编辑账号"
                             >
                               <Pencil className="size-4" />
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 rounded-lg px-2 py-2 text-xs transition hover:bg-stone-100 hover:text-stone-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-stone-400"
+                              onClick={() => {
+                                if (!account.password) {
+                                  toast.error("该账号没有保存密码");
+                                  return;
+                                }
+                                void navigator.clipboard.writeText(account.password);
+                                toast.success("密码已复制");
+                              }}
+                              disabled={!account.password}
+                              title={account.password ? "复制密码" : "该账号没有保存密码"}
+                            >
+                              <KeyRound className="size-4" />
+                              密码
                             </button>
                             <button
                               type="button"
                               className="rounded-lg p-2 transition hover:bg-stone-100 hover:text-stone-700"
                               onClick={() => void handleRefreshAccounts([account.access_token])}
                               disabled={isRefreshing}
+                              title="刷新账号"
                             >
                               <RefreshCw className={cn("size-4", isRefreshing ? "animate-spin" : "")} />
                             </button>
@@ -706,6 +726,7 @@ function AccountsPageContent() {
                               className="rounded-lg p-2 transition hover:bg-rose-50 hover:text-rose-500"
                               onClick={() => void handleDeleteTokens([account.access_token])}
                               disabled={isDeleting}
+                              title="删除账号"
                             >
                               <Trash2 className="size-4" />
                             </button>
