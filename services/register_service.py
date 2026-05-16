@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -49,7 +50,8 @@ class RegisterService:
         self._logs: list[dict] = []
         openai_register.register_log_sink = self._append_log
         self._config = self._load()
-        if self._config["enabled"]:
+        autostart = os.getenv("CHATGPT2API_REGISTER_AUTOSTART", "1").lower() not in {"0", "false", "no"}
+        if self._config["enabled"] and autostart:
             self.start()
 
     def _load(self) -> dict:

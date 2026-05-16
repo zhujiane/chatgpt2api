@@ -29,7 +29,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "3000:80"
+      - "8000:80"
     volumes:
       - ./data:/app/data
       - ./config.json:/app/config.json

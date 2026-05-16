@@ -34,11 +34,19 @@ docker compose up -d
 
 启动前请先在 `config.json` 中设置 `auth-key`，也可以在 `docker-compose.yml` 中通过 `CHATGPT2API_AUTH_KEY` 覆盖。
 
-- Web 面板：`http://localhost:3000`
-- API 地址：`http://localhost:3000/v1`
+- Web 面板：`http://localhost:8000`
+- API 地址：`http://localhost:8000/v1`
 - 数据目录：`./data`
 
 ### 本地开发
+
+VS Code 中选择 `Full Stack Debug (F5)` 后按 F5，可同时启动：
+
+- 前端：`http://127.0.0.1:8000`
+- 后端 API：`http://127.0.0.1:8001`
+- 本地数据库：`postgresql://chatgpt2api:chatgpt2api_password@localhost:5432/chatgpt2api`
+
+F5 调试默认会设置 `CHATGPT2API_REGISTER_AUTOSTART=false`，避免本地启动时自动恢复未完成的注册任务。
 
 启动后端：
 

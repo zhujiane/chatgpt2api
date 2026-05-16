@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend API (uvicorn:8001)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "program": "${workspaceFolder}/main.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "HOST": "127.0.0.1",
+        "PORT": "8001",
+        "STORAGE_BACKEND": "postgres",
+        "DATABASE_URL": "postgresql://chatgpt2api:chatgpt2api_password@localhost:5432/chatgpt2api",
+        "CHATGPT2API_REGISTER_AUTOSTART": "false",
+        "PYTHONPATH": "${workspaceFolder}"
+      },
+      "justMyCode": true
+    },
+    {
+      "name": "Frontend Web (Next.js:8000)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "bun run dev",
+      "cwd": "${workspaceFolder}/web",
+      "env": {
+        "NEXT_PUBLIC_API_URL": "http://127.0.0.1:8001"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack Debug (F5)",
+      "configurations": [
+        "Backend API (uvicorn:8001)",
+        "Frontend Web (Next.js:8000)"
+      ],
+      "stopAll": true
+    }
+  ]
+}
