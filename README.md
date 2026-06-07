@@ -34,11 +34,19 @@ docker compose up -d
 
 启动前请先在 `config.json` 中设置 `auth-key`，也可以在 `docker-compose.yml` 中通过 `CHATGPT2API_AUTH_KEY` 覆盖。
 
-- Web 面板：`http://localhost:3000`
-- API 地址：`http://localhost:3000/v1`
+- Web 面板：`http://localhost:8000`
+- API 地址：`http://localhost:8000/v1`
 - 数据目录：`./data`
 
 ### 本地开发
+
+VS Code 中选择 `Full Stack Debug (F5)` 后按 F5，可同时启动：
+
+- 前端：`http://127.0.0.1:8000`
+- 后端 API：`http://127.0.0.1:8001`
+- 本地数据库：`postgresql://chatgpt2api:chatgpt2api_password@localhost:5432/chatgpt2api`
+
+F5 调试默认会设置 `CHATGPT2API_REGISTER_AUTOSTART=false`，避免本地启动时自动恢复未完成的注册任务。
 
 启动后端：
 
@@ -73,6 +81,23 @@ environment:
   - STORAGE_BACKEND=postgres
   - DATABASE_URL=postgresql://user:password@host:5432/dbname
 ```
+
+### 注册机 Cloudflare Clearance
+
+注册机支持通过 FlareSolverr 为 `https://auth.openai.com` 预取 Cloudflare cookies 和匹配的 `User-Agent`，同一个注册代理会复用同一份 clearance。可在注册机页面配置，也可以通过环境变量启用：
+
+```yaml
+environment:
+  - CHATGPT2API_REGISTER_CLEARANCE_MODE=flaresolverr
+  - CHATGPT2API_REGISTER_CLEARANCE_TARGET_URL=https://auth.openai.com
+  - CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL=http://host.docker.internal:8191
+  - CHATGPT2API_REGISTER_CLEARANCE_REFRESH_INTERVAL=600
+  - CHATGPT2API_REGISTER_CLEARANCE_TIMEOUT_SEC=60
+```
+
+本地直接运行后端时，`CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL` 可填写 `http://127.0.0.1:8191`。
+
+如果注册机配置了代理，FlareSolverr 解 challenge 时会使用同一个代理，避免不同出口之间混用 `cf_clearance`。
 
 ## 功能
 

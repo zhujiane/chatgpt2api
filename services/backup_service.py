@@ -16,7 +16,8 @@ from urllib.parse import quote, urlencode
 from curl_cffi import requests
 
 from services.config import BASE_DIR, CONFIG_FILE, DATA_DIR, config, load_backup_state, save_backup_state
-from services.image_tags_service import TAGS_FILE
+from services.image_tags_service import TAGS_FILE, load_tags
+from services.log_service import log_service
 
 
 def _utc_now() -> datetime:
@@ -629,6 +630,11 @@ class BackupService:
                 self._add_file_to_archive(archive, DATA_DIR / "sub2api_config.json", "data/sub2api_config.json")
             if include.get("logs"):
                 self._add_file_to_archive(archive, DATA_DIR / "logs.jsonl", "data/logs.jsonl")
+                self._add_bytes_to_archive(
+                    archive,
+                    "snapshots/logs.json",
+                    _json_bytes(log_service.list(limit=0)),
+                )
             if include.get("image_tasks"):
                 self._add_file_to_archive(archive, DATA_DIR / "image_tasks.json", "data/image_tasks.json")
             if include.get("accounts_snapshot"):
@@ -645,6 +651,11 @@ class BackupService:
                 )
             if include.get("images"):
                 self._add_file_to_archive(archive, TAGS_FILE, "data/image_tags.json")
+                self._add_bytes_to_archive(
+                    archive,
+                    "snapshots/image_tags.json",
+                    _json_bytes(load_tags()),
+                )
                 self._add_directory_to_archive(archive, config.images_dir, "data/images")
         return buffer.getvalue()
 

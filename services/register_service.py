@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from services.account_service import account_service
 from services.config import DATA_DIR
+from services.register.clearance import normalize_clearance_config
 from services.register import openai_register
 
 
@@ -34,6 +36,7 @@ def _normalize(raw: dict) -> dict:
     cfg["target_available"] = max(1, int(cfg.get("target_available") or 1))
     cfg["check_interval"] = max(1, int(cfg.get("check_interval") or 5))
     cfg["proxy"] = str(cfg.get("proxy") or "").strip()
+    cfg["clearance"] = normalize_clearance_config(cfg.get("clearance"))
     cfg["enabled"] = bool(cfg.get("enabled"))
     stats = {**_default_config()["stats"], **(raw.get("stats") if isinstance(raw.get("stats"), dict) else {}),
              "threads": cfg["threads"]}
@@ -49,7 +52,8 @@ class RegisterService:
         self._logs: list[dict] = []
         openai_register.register_log_sink = self._append_log
         self._config = self._load()
-        if self._config["enabled"]:
+        autostart = os.getenv("CHATGPT2API_REGISTER_AUTOSTART", "1").lower() not in {"0", "false", "no"}
+        if self._config["enabled"] and autostart:
             self.start()
 
     def _load(self) -> dict:
@@ -69,7 +73,7 @@ class RegisterService:
     def update(self, updates: dict) -> dict:
         with self._lock:
             self._config = _normalize({**self._config, **updates})
-            openai_register.config.update({k: self._config[k] for k in ("mail", "proxy", "total", "threads")})
+            openai_register.config.update({k: self._config[k] for k in ("mail", "proxy", "clearance", "total", "threads")})
             self._save()
             return self.get()
 
@@ -83,7 +87,7 @@ class RegisterService:
             self._logs = []
             metrics = self._pool_metrics()
             self._config["stats"] = {"job_id": uuid.uuid4().hex, "success": 0, "fail": 0, "done": 0, "running": 0, "threads": self._config["threads"], **metrics, "started_at": _now(), "updated_at": _now()}
-            openai_register.config.update({k: self._config[k] for k in ("mail", "proxy", "total", "threads")})
+            openai_register.config.update({k: self._config[k] for k in ("mail", "proxy", "clearance", "total", "threads")})
             with openai_register.stats_lock:
                 openai_register.stats.update({"done": 0, "success": 0, "fail": 0, "start_time": time.time()})
             self._save()

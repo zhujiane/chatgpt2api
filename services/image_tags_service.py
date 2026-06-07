@@ -1,11 +1,83 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+from sqlalchemy import Column, String, Text, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
 from services.config import DATA_DIR
 
 TAGS_FILE = DATA_DIR / "image_tags.json"
+
+Base = declarative_base()
+
+
+class ImageTagModel(Base):
+    __tablename__ = "image_tags"
+
+    image_rel = Column(String(1024), primary_key=True)
+    tags = Column(Text, nullable=False)
+
+
+def _database_url() -> str:
+    backend = os.getenv("STORAGE_BACKEND", "json").lower().strip()
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if backend in {"postgres", "postgresql", "database"} and database_url:
+        return database_url
+    return ""
+
+
+class _DatabaseTags:
+    def __init__(self, database_url: str):
+        self.engine = create_engine(database_url, pool_pre_ping=True, pool_recycle=3600)
+        Base.metadata.create_all(self.engine)
+        self.Session = sessionmaker(bind=self.engine)
+
+    def load(self) -> dict[str, list[str]]:
+        session = self.Session()
+        try:
+            result: dict[str, list[str]] = {}
+            for row in session.query(ImageTagModel).all():
+                try:
+                    tags = json.loads(row.tags)
+                except Exception:
+                    continue
+                if isinstance(tags, list):
+                    result[str(row.image_rel)] = [str(item) for item in tags if str(item).strip()]
+            return result
+        finally:
+            session.close()
+
+    def save(self, data: dict[str, list[str]]) -> None:
+        session = self.Session()
+        try:
+            session.query(ImageTagModel).delete()
+            for image_rel, tags in data.items():
+                cleaned = list(dict.fromkeys(str(t).strip() for t in tags if str(t).strip()))
+                if cleaned:
+                    session.add(ImageTagModel(image_rel=str(image_rel), tags=json.dumps(cleaned, ensure_ascii=False)))
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+
+_database_tags: _DatabaseTags | None = None
+
+
+def _get_database_tags() -> _DatabaseTags | None:
+    global _database_tags
+    database_url = _database_url()
+    if not database_url:
+        return None
+    if _database_tags is None:
+        _database_tags = _DatabaseTags(database_url)
+    return _database_tags
 
 
 def _ensure_file() -> None:
@@ -15,6 +87,10 @@ def _ensure_file() -> None:
 
 
 def load_tags() -> dict[str, list[str]]:
+    database_tags = _get_database_tags()
+    if database_tags is not None:
+        return database_tags.load()
+
     _ensure_file()
     try:
         data = json.loads(TAGS_FILE.read_text(encoding="utf-8"))
@@ -24,6 +100,11 @@ def load_tags() -> dict[str, list[str]]:
 
 
 def save_tags(data: dict[str, list[str]]) -> None:
+    database_tags = _get_database_tags()
+    if database_tags is not None:
+        database_tags.save(data)
+        return
+
     _ensure_file()
     TAGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
