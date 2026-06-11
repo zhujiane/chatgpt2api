@@ -1,5 +1,5 @@
 {
-  "auth-key": "chatgpt2api",
+  "auth-key": "zhujiancc",
   "refresh_account_interval_minute": 60,
   "image_retention_days": 15,
   "image_poll_timeout_secs": 120,
@@ -26,8 +26,8 @@
     "enabled": false,
     "provider": "cloudflare_r2",
     "account_id": "",
-    "access_key_id": "",
-    "secret_access_key": "",
+    "access_key_id": "admin@gmail.com",
+    "secret_access_key": "zhujiancc",
     "bucket": "",
     "prefix": "backups",
     "interval_minutes": 1440,

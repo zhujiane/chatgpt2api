@@ -46,6 +46,44 @@ class AccountService:
             return True
         return int(account.get("quota") or 0) > 0
 
+    @staticmethod
+    def _normalize_account_type(value: Any) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        key = raw.lower().replace("-", "_").replace(" ", "_")
+        mapping = {
+            "free": "free",
+            "plus": "plus",
+            "pro": "pro",
+            "team": "team",
+            "business": "business",
+            "enterprise": "enterprise",
+            "edu": "edu",
+            "pro_lite": "ProLite",
+            "prolite": "ProLite",
+        }
+        return mapping.get(key)
+
+    def _search_account_type(self, payload: Any) -> str | None:
+        if isinstance(payload, dict):
+            for key in ("type", "plan_type", "account_plan", "plan"):
+                account_type = self._normalize_account_type(payload.get(key))
+                if account_type:
+                    return account_type
+            for value in payload.values():
+                if isinstance(value, (dict, list)):
+                    account_type = self._search_account_type(value)
+                    if account_type:
+                        return account_type
+        if isinstance(payload, list):
+            for value in payload:
+                if isinstance(value, (dict, list)):
+                    account_type = self._search_account_type(value)
+                    if account_type:
+                        return account_type
+        return None
+
     def _normalize_account(self, item: dict) -> dict | None:
         if not isinstance(item, dict):
             return None
@@ -54,7 +92,7 @@ class AccountService:
             return None
         normalized = dict(item)
         normalized["access_token"] = access_token
-        normalized["type"] = normalized.get("type") or "free"
+        normalized["type"] = self._normalize_account_type(normalized.get("type")) or "free"
         normalized["status"] = normalized.get("status") or "正常"
         normalized["quota"] = max(0, int(normalized.get("quota") if normalized.get("quota") is not None else 0))
         normalized["image_quota_unknown"] = bool(normalized.get("image_quota_unknown"))
@@ -212,6 +250,47 @@ class AccountService:
                         **current,
                         "access_token": access_token,
                         "type": str(current.get("type") or "free"),
+                    }
+                )
+                if account is not None:
+                    self._accounts[access_token] = account
+            self._save_accounts()
+            items = [dict(item) for item in self._accounts.values()]
+            log_service.add(LOG_TYPE_ACCOUNT, f"新增 {added} 个账号，跳过 {skipped} 个",
+                            {"added": added, "skipped": skipped})
+        return {"added": added, "skipped": skipped, "items": items}
+
+    def add_account_records(self, records: list[dict[str, Any]]) -> dict:
+        normalized_records: list[dict[str, Any]] = []
+        seen_tokens: set[str] = set()
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            access_token = str(record.get("access_token") or "").strip()
+            if not access_token or access_token in seen_tokens:
+                continue
+            seen_tokens.add(access_token)
+            normalized_records.append({**record, "access_token": access_token})
+        if not normalized_records:
+            return {"added": 0, "skipped": 0, "items": self.list_accounts()}
+
+        with self._lock:
+            added = 0
+            skipped = 0
+            for record in normalized_records:
+                access_token = record["access_token"]
+                current = self._accounts.get(access_token)
+                if current is None:
+                    added += 1
+                    current = {}
+                else:
+                    skipped += 1
+                account = self._normalize_account(
+                    {
+                        **current,
+                        **record,
+                        "access_token": access_token,
+                        "type": str(record.get("type") or current.get("type") or "free"),
                     }
                 )
                 if account is not None:

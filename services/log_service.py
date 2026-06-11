@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import itertools
 import time
 from dataclasses import dataclass, field
@@ -13,6 +14,9 @@ from uuid import uuid4
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import Column, String, Text, create_engine, delete
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
 from services.config import DATA_DIR
 from utils.helper import anthropic_sse_stream, sse_json_stream
@@ -20,11 +24,36 @@ from utils.helper import anthropic_sse_stream, sse_json_stream
 LOG_TYPE_CALL = "call"
 LOG_TYPE_ACCOUNT = "account"
 
+Base = declarative_base()
+
+
+class LogModel(Base):
+    """系统日志数据模型"""
+    __tablename__ = "logs"
+
+    id = Column(String(64), primary_key=True)
+    time = Column(String(32), nullable=False, index=True)
+    type = Column(String(64), nullable=False, index=True)
+    summary = Column(Text, nullable=False)
+    data = Column(Text, nullable=False)
+
 
 class LogService:
     def __init__(self, path: Path):
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.database_url = _get_log_database_url()
+        self.engine = None
+        self.Session = None
+        if self.database_url:
+            self.engine = create_engine(
+                self.database_url,
+                pool_pre_ping=True,
+                pool_recycle=3600,
+            )
+            Base.metadata.create_all(self.engine)
+            self.Session = sessionmaker(bind=self.engine)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _legacy_id(raw_line: str, line_number: int) -> str:
@@ -47,6 +76,20 @@ class LogService:
         return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod
+    def _row_to_item(row: LogModel) -> dict[str, Any] | None:
+        try:
+            item = json.loads(row.data)
+        except Exception:
+            return None
+        if not isinstance(item, dict):
+            return None
+        item["id"] = str(item.get("id") or row.id)
+        item["time"] = str(item.get("time") or row.time)
+        item["type"] = str(item.get("type") or row.type)
+        item["summary"] = str(item.get("summary") or row.summary)
+        return item
+
+    @staticmethod
     def _matches_filters(item: dict[str, Any], *, type: str = "", start_date: str = "", end_date: str = "") -> bool:
         t = str(item.get("time") or "")
         day = t[:10]
@@ -66,10 +109,52 @@ class LogService:
             "summary": summary,
             "detail": detail or data,
         }
+        if self.Session is not None:
+            session = self.Session()
+            try:
+                session.merge(
+                    LogModel(
+                        id=str(item["id"]),
+                        time=str(item["time"]),
+                        type=str(item["type"]),
+                        summary=str(item["summary"]),
+                        data=self._serialize_item(item),
+                    )
+                )
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+            return
+
         with self.path.open("a", encoding="utf-8") as file:
             file.write(self._serialize_item(item) + "\n")
 
     def list(self, type: str = "", start_date: str = "", end_date: str = "", limit: int = 200) -> list[dict[str, Any]]:
+        if self.Session is not None:
+            session = self.Session()
+            try:
+                query = session.query(LogModel)
+                if type:
+                    query = query.filter(LogModel.type == type)
+                if start_date:
+                    query = query.filter(LogModel.time >= start_date)
+                if end_date:
+                    query = query.filter(LogModel.time <= f"{end_date} 23:59:59")
+                query = query.order_by(LogModel.time.desc())
+                if limit > 0:
+                    query = query.limit(limit)
+                items: list[dict[str, Any]] = []
+                for row in query.all():
+                    item = self._row_to_item(row)
+                    if item is not None:
+                        items.append(item)
+                return items
+            finally:
+                session.close()
+
         if not self.path.exists():
             return []
         items: list[dict[str, Any]] = []
@@ -81,12 +166,26 @@ class LogService:
             if not self._matches_filters(item, type=type, start_date=start_date, end_date=end_date):
                 continue
             items.append(item)
-            if len(items) >= limit:
+            if limit > 0 and len(items) >= limit:
                 break
         return items
 
     def delete(self, ids: list[str]) -> dict[str, int]:
         target_ids = {str(item or "").strip() for item in ids if str(item or "").strip()}
+        if self.Session is not None:
+            if not target_ids:
+                return {"removed": 0}
+            session = self.Session()
+            try:
+                result = session.execute(delete(LogModel).where(LogModel.id.in_(target_ids)))
+                session.commit()
+                return {"removed": int(result.rowcount or 0)}
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+
         if not self.path.exists() or not target_ids:
             return {"removed": 0}
         lines = self.path.read_text(encoding="utf-8").splitlines()
@@ -106,6 +205,49 @@ class LogService:
             content += "\n"
         self.path.write_text(content, encoding="utf-8")
         return {"removed": removed}
+
+    def replace_all(self, items: list[dict[str, Any]]) -> None:
+        if self.Session is not None:
+            session = self.Session()
+            try:
+                session.query(LogModel).delete()
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    item_id = str(item.get("id") or uuid4().hex)
+                    item_time = str(item.get("time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    item_type = str(item.get("type") or "")
+                    item_summary = str(item.get("summary") or "")
+                    normalized = dict(item)
+                    normalized.update({"id": item_id, "time": item_time, "type": item_type, "summary": item_summary})
+                    session.add(
+                        LogModel(
+                            id=item_id,
+                            time=item_time,
+                            type=item_type,
+                            summary=item_summary,
+                            data=self._serialize_item(normalized),
+                        )
+                    )
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+            return
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        content = "".join(self._serialize_item(item) + "\n" for item in items if isinstance(item, dict))
+        self.path.write_text(content, encoding="utf-8")
+
+
+def _get_log_database_url() -> str:
+    backend = os.getenv("STORAGE_BACKEND", "json").lower().strip()
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if backend in {"postgres", "postgresql", "database"} and database_url:
+        return database_url
+    return ""
 
 
 log_service = LogService(DATA_DIR / "logs.jsonl")
