@@ -17,6 +17,16 @@ from services.register import openai_register
 
 REGISTER_FILE = DATA_DIR / "register.json"
 
+CLEARANCE_ENV_OVERRIDES = {
+    "CHATGPT2API_REGISTER_CLEARANCE_MODE": "mode",
+    "CHATGPT2API_REGISTER_CLEARANCE_TARGET_URL": "target_url",
+    "CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL": "flaresolverr_url",
+    "CHATGPT2API_REGISTER_CLEARANCE_TIMEOUT_SEC": "timeout_sec",
+    "CHATGPT2API_REGISTER_CLEARANCE_REFRESH_INTERVAL": "refresh_interval",
+    "CHATGPT2API_REGISTER_CLEARANCE_CF_COOKIES": "cf_cookies",
+    "CHATGPT2API_REGISTER_CLEARANCE_USER_AGENT": "user_agent",
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -36,12 +46,20 @@ def _normalize(raw: dict) -> dict:
     cfg["target_available"] = max(1, int(cfg.get("target_available") or 1))
     cfg["check_interval"] = max(1, int(cfg.get("check_interval") or 5))
     cfg["proxy"] = str(cfg.get("proxy") or "").strip()
-    cfg["clearance"] = normalize_clearance_config(cfg.get("clearance"))
+    cfg["clearance"] = _apply_clearance_env_overrides(normalize_clearance_config(cfg.get("clearance")))
     cfg["enabled"] = bool(cfg.get("enabled"))
     stats = {**_default_config()["stats"], **(raw.get("stats") if isinstance(raw.get("stats"), dict) else {}),
              "threads": cfg["threads"]}
     cfg["stats"] = stats
     return cfg
+
+
+def _apply_clearance_env_overrides(clearance: dict) -> dict:
+    for env_key, config_key in CLEARANCE_ENV_OVERRIDES.items():
+        value = os.getenv(env_key)
+        if value is not None:
+            clearance[config_key] = value
+    return normalize_clearance_config(clearance)
 
 
 class RegisterService:
