@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import random
 import secrets
 import string
@@ -21,6 +22,14 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from services.account_service import account_service
+from services.register.clearance import (
+    DEFAULT_CLEARANCE_CONFIG,
+    ClearanceBundle,
+    apply_bundle_to_session,
+    apply_user_agent,
+    normalize_clearance_config,
+    register_clearance_store,
+)
 from services.register import mail_provider
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -33,15 +42,30 @@ config = {
         "providers": [],
     },
     "proxy": "",
+    "clearance": dict(DEFAULT_CLEARANCE_CONFIG),
     "total": 10,
     "threads": 3,
 }
 register_config_file = base_dir.parents[1] / "data" / "register.json"
 try:
     saved_config = json.loads(register_config_file.read_text(encoding="utf-8"))
-    config.update({key: saved_config[key] for key in ("mail", "proxy", "total", "threads") if key in saved_config})
+    config.update({key: saved_config[key] for key in ("mail", "proxy", "clearance", "total", "threads") if key in saved_config})
 except Exception:
     pass
+config["clearance"] = normalize_clearance_config(config.get("clearance"))
+for env_key, config_key in {
+    "CHATGPT2API_REGISTER_CLEARANCE_MODE": "mode",
+    "CHATGPT2API_REGISTER_CLEARANCE_TARGET_URL": "target_url",
+    "CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL": "flaresolverr_url",
+    "CHATGPT2API_REGISTER_CLEARANCE_TIMEOUT_SEC": "timeout_sec",
+    "CHATGPT2API_REGISTER_CLEARANCE_REFRESH_INTERVAL": "refresh_interval",
+    "CHATGPT2API_REGISTER_CLEARANCE_CF_COOKIES": "cf_cookies",
+    "CHATGPT2API_REGISTER_CLEARANCE_USER_AGENT": "user_agent",
+}.items():
+    value = os.getenv(env_key)
+    if value is not None:
+        config["clearance"][config_key] = value
+config["clearance"] = normalize_clearance_config(config.get("clearance"))
 
 auth_base = "https://auth.openai.com"
 platform_base = "https://platform.openai.com"
@@ -130,6 +154,10 @@ def _make_trace_headers() -> dict[str, str]:
         "x-datadog-sampling-priority": "1",
         "x-datadog-trace-id": trace_id,
     }
+
+
+def _with_user_agent(headers: dict[str, str], ua: str) -> dict[str, str]:
+    return apply_user_agent(dict(headers), ua or user_agent)
 
 
 def _generate_pkce() -> tuple[str, str]:
@@ -256,20 +284,23 @@ class SentinelTokenGenerator:
         return "gAAAAAB" + self.ERROR_PREFIX + self._b64(str(None))
 
 
-def build_sentinel_token(session: requests.Session, device_id: str, flow: str) -> str:
-    generator = SentinelTokenGenerator(device_id, user_agent)
-    resp = session.post(
-        "https://sentinel.openai.com/backend-api/sentinel/req",
-        data=json.dumps({"p": generator.generate_requirements_token(), "id": device_id, "flow": flow}),
-        headers={
+def build_sentinel_token(session: requests.Session, device_id: str, flow: str, ua: str = "") -> str:
+    active_user_agent = ua or user_agent
+    generator = SentinelTokenGenerator(device_id, active_user_agent)
+    headers = _with_user_agent(
+        {
             "Content-Type": "text/plain;charset=UTF-8",
             "Referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html",
             "Origin": "https://sentinel.openai.com",
-            "User-Agent": user_agent,
-            "sec-ch-ua": sec_ch_ua,
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
         },
+        active_user_agent,
+    )
+    resp = session.post(
+        "https://sentinel.openai.com/backend-api/sentinel/req",
+        data=json.dumps({"p": generator.generate_requirements_token(), "id": device_id, "flow": flow}),
+        headers=headers,
         timeout=20,
         verify=False,
     )
@@ -316,15 +347,16 @@ def request_with_local_retry(session: requests.Session, method: str, url: str, r
     return None, last_error
 
 
-def validate_otp(session: requests.Session, device_id: str, code: str):
+def validate_otp(session: requests.Session, device_id: str, code: str, ua: str = ""):
     headers = dict(common_headers)
     headers["referer"] = f"{auth_base}/email-verification"
     headers["oai-device-id"] = device_id
     headers.update(_make_trace_headers())
+    headers = _with_user_agent(headers, ua or user_agent)
     resp, error = request_with_local_retry(session, "post", f"{auth_base}/api/accounts/email-otp/validate", json={"code": code}, headers=headers, verify=False)
     if resp is not None and resp.status_code == 200:
         return resp, ""
-    headers["openai-sentinel-token"] = build_sentinel_token(session, device_id, "authorize_continue")
+    headers["openai-sentinel-token"] = build_sentinel_token(session, device_id, "authorize_continue", ua or user_agent)
     resp, error = request_with_local_retry(session, "post", f"{auth_base}/api/accounts/email-otp/validate", json={"code": code}, headers=headers, verify=False)
     return resp, error
 
@@ -342,12 +374,12 @@ def extract_oauth_callback_params_from_url(url: str) -> dict[str, str] | None:
     return {"code": code, "state": str((params.get("state") or [""])[0]).strip(), "scope": str((params.get("scope") or [""])[0]).strip()}
 
 
-def extract_oauth_callback_params_from_consent_session(session: requests.Session, consent_url: str, device_id: str) -> dict[str, str] | None:
+def extract_oauth_callback_params_from_consent_session(session: requests.Session, consent_url: str, device_id: str, ua: str = "") -> dict[str, str] | None:
     if consent_url.startswith("/"):
         consent_url = f"{auth_base}{consent_url}"
     current_url = consent_url
     for _ in range(10):
-        response = session.get(current_url, headers=navigate_headers, verify=False, timeout=30, allow_redirects=False)
+        response = session.get(current_url, headers=_with_user_agent(navigate_headers, ua or user_agent), verify=False, timeout=30, allow_redirects=False)
         callback_params = extract_oauth_callback_params_from_url(str(response.url)) or extract_oauth_callback_params_from_url(str(response.headers.get("Location") or "").strip())
         if callback_params:
             return callback_params
@@ -371,6 +403,7 @@ def extract_oauth_callback_params_from_consent_session(session: requests.Session
     headers["referer"] = consent_url
     headers["oai-device-id"] = device_id
     headers.update(_make_trace_headers())
+    headers = _with_user_agent(headers, ua or user_agent)
     ws_resp = session.post(f"{auth_base}/api/accounts/workspace/select", json={"workspace_id": workspace_id}, headers=headers, verify=False, timeout=30, allow_redirects=False)
     callback_params = extract_oauth_callback_params_from_url(str(ws_resp.headers.get("Location") or "").strip())
     if callback_params:
@@ -387,6 +420,7 @@ def extract_oauth_callback_params_from_consent_session(session: requests.Session
     org_headers["referer"] = str(ws_data.get("continue_url") or consent_url)
     org_headers["oai-device-id"] = device_id
     org_headers.update(_make_trace_headers())
+    org_headers = _with_user_agent(org_headers, ua or user_agent)
     body = {"org_id": org_id}
     if project_id:
         body["project_id"] = project_id
@@ -394,26 +428,42 @@ def extract_oauth_callback_params_from_consent_session(session: requests.Session
     return extract_oauth_callback_params_from_url(str(org_resp.headers.get("Location") or "").strip())
 
 
-def exchange_platform_tokens(session: requests.Session, device_id: str, code_verifier: str, consent_url: str) -> dict | None:
-    callback_params = extract_oauth_callback_params_from_consent_session(session, consent_url, device_id)
+def exchange_platform_tokens(
+    session: requests.Session,
+    device_id: str,
+    code_verifier: str,
+    consent_url: str,
+    *,
+    proxy: str = "",
+    ua: str = "",
+    clearance_bundle: ClearanceBundle | None = None,
+) -> dict | None:
+    active_user_agent = ua or user_agent
+    callback_params = extract_oauth_callback_params_from_consent_session(session, consent_url, device_id, active_user_agent)
     if not callback_params:
         return None
     code = str(callback_params.get("code") or "").strip()
     if not code:
         return None
-    resp = create_session(config["proxy"]).post(
-        f"{auth_base}/oauth/token",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": platform_oauth_redirect_uri,
-            "client_id": platform_oauth_client_id,
-            "code_verifier": code_verifier,
-        },
-        verify=False,
-        timeout=60,
-    )
+    token_session = create_session(proxy)
+    try:
+        apply_bundle_to_session(token_session, clearance_bundle)
+        headers = _with_user_agent({"Content-Type": "application/x-www-form-urlencoded"}, active_user_agent)
+        resp = token_session.post(
+            f"{auth_base}/oauth/token",
+            headers=headers,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": platform_oauth_redirect_uri,
+                "client_id": platform_oauth_client_id,
+                "code_verifier": code_verifier,
+            },
+            verify=False,
+            timeout=60,
+        )
+    finally:
+        token_session.close()
     data = _response_json(resp)
     if resp.status_code != 200 or not data.get("access_token") or not data.get("refresh_token") or not data.get("id_token"):
         return None
@@ -428,24 +478,56 @@ def exchange_platform_tokens(session: requests.Session, device_id: str, code_ver
 
 class PlatformRegistrar:
     def __init__(self, proxy: str = "") -> None:
+        self.proxy = str(proxy or "").strip()
         self.session = create_session(proxy)
         self.device_id = str(uuid.uuid4())
+        self.clearance_config = normalize_clearance_config(config.get("clearance"))
+        self.clearance_bundle: ClearanceBundle | None = None
 
     def close(self) -> None:
         self.session.close()
+
+    def _active_user_agent(self) -> str:
+        return (self.clearance_bundle.user_agent if self.clearance_bundle else "") or user_agent
+
+    def _ensure_clearance(self, index: int, *, force_refresh: bool = False) -> None:
+        if str(self.clearance_config.get("mode") or "none") == "none":
+            return
+        if self.clearance_bundle and not force_refresh:
+            return
+        step(index, "开始获取 Cloudflare clearance")
+        self.clearance_bundle = register_clearance_store.get(
+            self.clearance_config,
+            self.proxy,
+            force_refresh=force_refresh,
+        )
+        apply_bundle_to_session(self.session, self.clearance_bundle)
+        if self.clearance_bundle:
+            step(index, f"clearance 获取完成: {self.clearance_bundle.clearance_host}/{self.clearance_bundle.affinity_key}")
+
+    def _invalidate_clearance_if_needed(self, resp, index: int) -> None:
+        status_code = getattr(resp, "status_code", None)
+        if status_code not in (401, 403):
+            return
+        register_clearance_store.invalidate(self.clearance_config, self.proxy)
+        self.clearance_bundle = None
+        step(index, f"上游返回 HTTP {status_code}，已标记 clearance 失效", "yellow")
+
+    def _apply_clearance_header(self, headers: dict[str, str]) -> dict[str, str]:
+        return _with_user_agent(headers, self._active_user_agent())
 
     def _navigate_headers(self, referer: str = "") -> dict[str, str]:
         headers = dict(navigate_headers)
         if referer:
             headers["referer"] = referer
-        return headers
+        return self._apply_clearance_header(headers)
 
     def _json_headers(self, referer: str) -> dict[str, str]:
         headers = dict(common_headers)
         headers["referer"] = referer
         headers["oai-device-id"] = self.device_id
         headers.update(_make_trace_headers())
-        return headers
+        return self._apply_clearance_header(headers)
 
     def _platform_authorize(self, email: str, index: int) -> None:
         step(index, "开始 platform authorize")
@@ -472,6 +554,7 @@ class PlatformRegistrar:
         }
         resp, error = request_with_local_retry(self.session, "get", f"{auth_base}/api/accounts/authorize?{urlencode(params)}", headers=self._navigate_headers(f"{platform_base}/"), allow_redirects=True, verify=False)
         if resp is None or resp.status_code != 200:
+            self._invalidate_clearance_if_needed(resp, index)
             err = _response_json(resp).get("error", {}) if resp is not None else {}
             detail = f": {err.get('code', '')} - {err.get('message', '')}".strip(" -") if err else ""
             raise RuntimeError(error or f"platform_authorize_http_{getattr(resp, 'status_code', 'unknown')}{detail}")
@@ -480,9 +563,10 @@ class PlatformRegistrar:
     def _register_user(self, email: str, password: str, index: int) -> None:
         step(index, "开始提交注册密码")
         headers = self._json_headers(f"{auth_base}/create-account/password")
-        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "username_password_create")
+        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "username_password_create", self._active_user_agent())
         resp, error = request_with_local_retry(self.session, "post", f"{auth_base}/api/accounts/user/register", json={"username": email, "password": password}, headers=headers, verify=False)
         if resp is None or resp.status_code != 200:
+            self._invalidate_clearance_if_needed(resp, index)
             data = _response_json(resp) if resp is not None else {}
             if data.get("message") == "Failed to create account. Please try again.":
                 step(index, "注册失败提示: 邮箱域名很可能因滥用被封禁，请更换邮箱域名", "yellow")
@@ -494,22 +578,25 @@ class PlatformRegistrar:
         step(index, "开始发送验证码")
         resp, error = request_with_local_retry(self.session, "get", f"{auth_base}/api/accounts/email-otp/send", headers=self._navigate_headers(f"{auth_base}/create-account/password"), allow_redirects=True, verify=False)
         if resp is None or resp.status_code not in (200, 302):
+            self._invalidate_clearance_if_needed(resp, index)
             raise RuntimeError(error or f"send_otp_http_{getattr(resp, 'status_code', 'unknown')}")
         step(index, "发送验证码完成")
 
     def _validate_otp(self, code: str, index: int) -> None:
         step(index, f"开始校验验证码 {code}")
-        resp, error = validate_otp(self.session, self.device_id, code)
+        resp, error = validate_otp(self.session, self.device_id, code, self._active_user_agent())
         if resp is None or resp.status_code != 200:
+            self._invalidate_clearance_if_needed(resp, index)
             raise RuntimeError(error or f"validate_otp_http_{getattr(resp, 'status_code', 'unknown')}")
         step(index, "验证码校验完成")
 
     def _create_account(self, name: str, birthdate: str, index: int) -> None:
         step(index, "开始创建账号资料")
         headers = self._json_headers(f"{auth_base}/about-you")
-        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "oauth_create_account")
+        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "oauth_create_account", self._active_user_agent())
         resp, error = request_with_local_retry(self.session, "post", f"{auth_base}/api/accounts/create_account", json={"name": name, "birthdate": birthdate}, headers=headers, verify=False)
         if resp is None or resp.status_code not in (200, 302):
+            self._invalidate_clearance_if_needed(resp, index)
             data = _response_json(resp) if resp is not None else {}
             if data.get("message") == "Failed to create account. Please try again.":
                 step(index, "创建账号失败提示: 邮箱域名很可能因滥用被封禁，请更换邮箱域名", "yellow")
@@ -543,9 +630,10 @@ class PlatformRegistrar:
             raise RuntimeError(error or "platform_login_authorize_failed")
         step(index, "登录 authorize 完成")
         headers = self._json_headers(f"{auth_base}/log-in/password")
-        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify")
+        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify", self._active_user_agent())
         resp, error = request_with_local_retry(self.session, "post", f"{auth_base}/api/accounts/password/verify", json={"password": password}, headers=headers, allow_redirects=False, verify=False)
         if resp is None or resp.status_code != 200:
+            self._invalidate_clearance_if_needed(resp, index)
             raise RuntimeError(error or f"password_verify_http_{getattr(resp, 'status_code', 'unknown')}")
         step(index, "密码校验完成")
         payload = _response_json(resp)
@@ -556,8 +644,9 @@ class PlatformRegistrar:
             code = wait_for_code(mailbox)
             if not code:
                 raise RuntimeError("独立登录等待验证码超时")
-            resp, reason = validate_otp(self.session, self.device_id, code)
+            resp, reason = validate_otp(self.session, self.device_id, code, self._active_user_agent())
             if resp is None or resp.status_code != 200:
+                self._invalidate_clearance_if_needed(resp, index)
                 print("独立登录验证码校验失败响应:", resp.text if resp is not None else "None")
                 data = _response_json(resp) if resp is not None else {}
                 message = str((data.get("error") or {}).get("message") or data.get("message") or "").strip()
@@ -567,7 +656,15 @@ class PlatformRegistrar:
             step(index, "独立登录验证码校验完成")
         if not continue_url:
             continue_url = f"{auth_base}/sign-in-with-chatgpt/codex/consent"
-        tokens = exchange_platform_tokens(self.session, self.device_id, code_verifier, continue_url)
+        tokens = exchange_platform_tokens(
+            self.session,
+            self.device_id,
+            code_verifier,
+            continue_url,
+            proxy=self.proxy,
+            ua=self._active_user_agent(),
+            clearance_bundle=self.clearance_bundle,
+        )
         if not tokens:
             raise RuntimeError("token换取失败")
         step(index, "token 换取完成")
@@ -582,6 +679,7 @@ class PlatformRegistrar:
         step(index, f"邮箱创建完成: {email}")
         password = _random_password()
         first_name, last_name = _random_name()
+        self._ensure_clearance(index)
         self._platform_authorize(email, index)
         self._register_user(email, password, index)
         self._send_otp(index)

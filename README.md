@@ -82,6 +82,23 @@ environment:
   - DATABASE_URL=postgresql://user:password@host:5432/dbname
 ```
 
+### 注册机 Cloudflare Clearance
+
+注册机支持通过 FlareSolverr 为 `https://auth.openai.com` 预取 Cloudflare cookies 和匹配的 `User-Agent`，同一个注册代理会复用同一份 clearance。可在注册机页面配置，也可以通过环境变量启用：
+
+```yaml
+environment:
+  - CHATGPT2API_REGISTER_CLEARANCE_MODE=flaresolverr
+  - CHATGPT2API_REGISTER_CLEARANCE_TARGET_URL=https://auth.openai.com
+  - CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL=http://host.docker.internal:8191
+  - CHATGPT2API_REGISTER_CLEARANCE_REFRESH_INTERVAL=600
+  - CHATGPT2API_REGISTER_CLEARANCE_TIMEOUT_SEC=60
+```
+
+本地直接运行后端时，`CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL` 可填写 `http://127.0.0.1:8191`。
+
+如果注册机配置了代理，FlareSolverr 解 challenge 时会使用同一个代理，避免不同出口之间混用 `cf_clearance`。
+
 ## 功能
 
 ### API 兼容能力

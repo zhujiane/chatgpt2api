@@ -29,7 +29,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8000:80"
+      - "${APP_PORT:-8001}:80"
     volumes:
       - ./data:/app/data
       - ./config.json:/app/config.json
@@ -39,7 +39,7 @@ services:
       - STORAGE_BACKEND=postgres
 
       # 数据库配置 (当 STORAGE_BACKEND=sqlite/postgres 时使用)
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-chatgpt2api}:${POSTGRES_PASSWORD:-chatgpt2api_password}@postgres:5432/${POSTGRES_DB:-chatgpt2api}
+      - DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/chatgpt2api
       # - DATABASE_URL=sqlite:///app/data/accounts.db
 
       # Git 仓库配置 (当 STORAGE_BACKEND=git 时使用)
@@ -54,5 +54,10 @@ services:
       # 基础 URL (可选)
       # - CHATGPT2API_BASE_URL=https://your-domain.com
 
-volumes:
-  postgres_data:
+      # 注册机 Cloudflare clearance
+      # 宿主机已有 FlareSolverr 时，容器内使用 host.docker.internal 访问
+      - CHATGPT2API_REGISTER_CLEARANCE_MODE=${CHATGPT2API_REGISTER_CLEARANCE_MODE:-flaresolverr}
+      - CHATGPT2API_REGISTER_CLEARANCE_TARGET_URL=${CHATGPT2API_REGISTER_CLEARANCE_TARGET_URL:-https://auth.openai.com}
+      - CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL=${CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL:-http://host.docker.internal:8191}
+      - CHATGPT2API_REGISTER_CLEARANCE_REFRESH_INTERVAL=${CHATGPT2API_REGISTER_CLEARANCE_REFRESH_INTERVAL:-600}
+      - CHATGPT2API_REGISTER_CLEARANCE_TIMEOUT_SEC=${CHATGPT2API_REGISTER_CLEARANCE_TIMEOUT_SEC:-60}
