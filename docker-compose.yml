@@ -1,23 +1,13 @@
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: chatgpt2api-postgres
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-chatgpt2api}
-      POSTGRES_USER: ${POSTGRES_USER:-chatgpt2api}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chatgpt2api_password}
-      TZ: Asia/Shanghai
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+      - "${FLARESOLVERR_PORT:-8191}:8191"
+    environment:
+      TZ: Asia/Shanghai
+      LOG_LEVEL: info
   app:
     build:
       context: .
@@ -26,10 +16,11 @@ services:
     container_name: chatgpt2api
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
+      - flaresolverr
     ports:
       - "${APP_PORT:-8001}:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
       - ./config.json:/app/config.json
@@ -58,6 +49,6 @@ services:
       # 宿主机已有 FlareSolverr 时，容器内使用 host.docker.internal 访问
       - CHATGPT2API_REGISTER_CLEARANCE_MODE=${CHATGPT2API_REGISTER_CLEARANCE_MODE:-flaresolverr}
       - CHATGPT2API_REGISTER_CLEARANCE_TARGET_URL=${CHATGPT2API_REGISTER_CLEARANCE_TARGET_URL:-https://auth.openai.com}
-      - CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL=${CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL:-http://host.docker.internal:8191}
+      - CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL=${CHATGPT2API_REGISTER_CLEARANCE_FLARESOLVERR_URL:-http://flaresolverr:8191}
       - CHATGPT2API_REGISTER_CLEARANCE_REFRESH_INTERVAL=${CHATGPT2API_REGISTER_CLEARANCE_REFRESH_INTERVAL:-600}
       - CHATGPT2API_REGISTER_CLEARANCE_TIMEOUT_SEC=${CHATGPT2API_REGISTER_CLEARANCE_TIMEOUT_SEC:-60}
